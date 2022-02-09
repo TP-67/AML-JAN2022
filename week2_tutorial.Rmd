@@ -1,0 +1,191 @@
+---
+title: "Week2 Tutorial - Exploratory Data Analysis"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+```{r}
+# Utility functions
+library(dplyr)
+library(DataExplorer)
+library(ggplot2)
+library(ggmap)
+```
+
+```{r}
+# Import Data (include header for using head name)
+df <- read.csv('kc_house_data.csv',header = TRUE)
+
+# Display the first n rows present in the input data frame
+head(df, n=10)
+```
+
+```{r}
+# Get dimension of the data frame
+dim(df)
+```
+
+```{r}
+# Remove column 1
+ds <- df[, -1]
+
+# Remove column 'price'
+ds$price <- NULL
+
+# Remove columns 1 to 3
+ds <- df[-1: -3]
+
+# Drop selected columns
+ds <- select (df, -1)
+ds <- select(df, -1: -5)
+names(ds)
+head(ds)
+
+# Select a single comun
+dr <- select (df, 5)
+names(dr)
+head(dr)
+```
+```{r}
+# Upper case
+colnames(ds) <- toupper(colnames(ds))
+print(colnames(ds))
+
+# Rename all columns
+colnames(ds) <- c('new_name1','new_name2','new_name3','new_name4','new_name5','new_name6','new_name7','new_name8','new_name9','new_name10','new_name12','new_name12','new_name13','new_name4','new_name15','new_name16')
+print(colnames(ds))
+
+# Rename a single column
+colnames(ds)[colnames(ds) == 'new_name1'] <- 'oldName'
+print(colnames(ds))
+```
+
+
+```{r}
+# Invoke a spreadsheet-style data viewer on a matrix-like R object
+View(df)
+```
+
+```{r}
+# View data structure
+glimpse(df)
+```
+
+```{r}
+# Get (or set) the name of an object
+names(df)
+```
+
+```{r}
+# Display the internal structure of a R object
+str(df)
+```
+
+```{r}
+# Get the statistical summary and nature of the DataFrame in R
+summary(df)
+```
+
+```{r}
+# Visualize data structures in D3 network graph
+plot_str(df, fontSize=20)
+```
+
+```{r}
+# Create histogram for each **continuous feature**
+plot_histogram(df)
+```
+
+```{r}
+# Create bar for each **discrete feature**
+plot_bar(df)
+
+plot_bar(df$waterfront)
+```
+
+```{r}
+# Use the cross-classifying factors to build a contingency table of the counts at each combination of factor levels
+table(df$condition)
+```
+
+```{r}
+# Visualize density estimates for each **continuous feature**
+plot_density(df)
+```
+
+```{r}
+# Create boxplot for **continuous features**
+# Para: (by) feature name to be broken down by
+plot_boxplot(df, by = 'price')
+
+# boxplot(df)
+```
+
+```{r}
+# Create correlation heatmap for **discrete features**
+plot_correlation(df, type=c("discrete"))
+```
+
+```{r}
+# Create correlation heatmap for **continuous features**
+plot_correlation(df, type=c('continuous'))
+```
+
+```{r}
+# Plot quantile-quantile for each **continuous feature**
+plot_qq(df)
+```
+
+```{r}
+# Create scatterplot for all features
+plot_scatterplot(df, 'price')
+```
+
+```{r}
+# Advanced plots
+barplot(table(df$condition), main="Waterfront Distribution", col=c("skyblue","purple", "yellow","red", "lightgreen"))
+```
+
+```{r}
+# "use": an optional character string giving a method for computing covariances in the presence of missing values
+plot_correlation(df,'continuous', cor_args = list("use" = "pairwise.complete.obs"))
+```
+
+```{r}
+# Missing Data
+plot_missing(df)
+```
+
+```{r}
+sum(is.na(df)) # sum of missing values in df
+```
+
+```{r}
+colSums(sapply(df,is.na)) # missing values by columns
+```
+
+```{r}
+sum(is.na(df$price))  # missing value in a column
+```
+
+```{r}
+which(is.na(df$waterfront)) # Which are the rows with missing values in a column
+```
+
+```{r}
+# Creating report
+create_report(df)
+```
+
+```{r}
+# help("plot_correlation")
+```
