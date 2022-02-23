@@ -361,7 +361,7 @@ Min-Max Norm and Standardization are two most commonly used methods. Min-Max Nor
 
 So, how to choose between normalization and standardization?
 
-|     | Need Boundary | Unknown Data Distribution |Gaussian Distribution | Data needs to be N($\mu$, 1) |
-|  ----  | ----  | ---- | ---- | ---- |
-| Min-Max-Normalization | v |  v | | |
+|  | Need Boundary | Unknown Data Distribution | Gaussian Distribution | Data needs to be N($\mu$, 1) |
+| ---- | ---- | ---- | ---- | ---- |
+| Min-Max-Normalization | v | v |  |  |
 | Standardization |  |  | v | v |
