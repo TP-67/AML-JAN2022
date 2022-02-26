@@ -1,0 +1,381 @@
+---
+title: "Week5 Tutorial - Linear Regression"
+date: "23/2/2021"
+output: html_notebook
+---
+
+```{r}
+# Import libraries
+library(tidyverse)
+library(DataExplorer)
+library(VIM)
+library(mice)
+library(missForest)
+library(caret)
+library(psych)
+library(reshape2)
+```
+
+## 1. Dataset Description
+
+### 1.1 General Information
+#### Data Set: https://www.kaggle.com/codersree/mount-rainier-weather-and-climbing-data
+#### Reference: https://www.kaggle.com/codersree/regression-models-to-predict-success-rate
+(1) As we all know, weather is a key factor in successful climbing. We try to investigate the relationship between success ratio and weather information.
+(2) The purpose of this project is to predict the success rate of climbing given historical climbing routes and the weather details of each day. The weather data is averaged on a daily basis.
+
+### 1.2 Independent Variables
+(1) Date: date of which a data point is recorded.
+(2) Route (Categorical variable): several routes to climb Mt Rainier.
+(3) Attempted (Integer): total number of people who attempted to climb Mt Rainier.
+(4) Succeeded (Integer): total number of people who successfully climb Mt Rainier.
+(5) Battery.Voltage.AVG (Continuous variable): average value of voltage.
+(6) Temperature.AVG (Continuous variable): average value of temperature in Fahrenheit.
+(7) Relative.Humidity.AVG (Continuous variable): average value of humidity.
+(8) Wind.Speed.Daily.AVG (Continuous variable): average value of wind speed in MPH.
+(9) Wind.Direction.AVG (Continuous variable): average value of direction of the wind in DEG.
+(10) Solar.Radiation.AVG (Continuous variable): average value of  solar radiation in Watts/square meter.
+
+### 1.3 Dependent Variables
+(1) Success.Percentage (Continuous variable): succeeded / (attempted + succeeded).
+
+```{r}
+# Load data
+df.cs <- read.csv('climbing_statistics.csv', header = T)
+df.rw <- read.csv('rainier_weather.csv', header = T)
+```
+
+## 2. Dataset Overview
+```{r}
+# View climbing statistics data
+summary(df.cs)
+```
+
+```{r}
+# View rainier weather data
+summary(df.rw)
+```
+
+## 3. Merge Datasets
+Here, we combine these two data sets into one integrated data set. First, we need to check if these two data sets have missing values.
+
+```{r}
+sum(is.na(df.cs))
+sum(is.na(df.rw))
+```
+As we can see, these is no missing value in both data sets.
+
+#### Merge two data sets into one integrated data set using left-merge operation by 'date' column.
+```{r}
+# Merge two data sets.
+df = left_join(df.cs, df.rw, by=c("Date" = "Date"))
+# New data set overview
+summary(df)
+```
+
+```{r}
+# Dataset info
+str(df)
+```
+
+## 4. Data Imputation
+```{r}
+# Prior to treating missing values any blanks in the data set must be converted to NA.
+df <- mutate_all(df, na_if, "")
+```
+
+### 4.1 Drop Missing Values
+The climbing statistics data set has 4077 records and the rainier weather data set has 464 records. After left joining together, there are some rows missing weather data. To me, it doesn't make sense to impute missing weather values with the average or mean value of the month. Therefore, I would only use the climbing statistics where the weather values are available for those days.
+
+```{r}
+# Drop missing values.
+df = na.omit(df)
+```
+
+### 4.2 Fix Outliers
+In this data set, several succeeded ratio have values larger than 1.0, which is impossible. Therefore, we need to remove rows that contain this outliers.
+```{r}
+# Remove rows that contain succeeded ratio larger than 1.0.
+df = df[which(df$Success.Percentage <= 1.0), ]
+```
+
+### 4.3 Plot Missing Values
+```{r}
+# Viewing and counting missing data using DataExplorer package.
+plot_missing(df)
+```
+Good News, there is no missing value now.
+
+```{r}
+# Using VIM library
+vim_plot <- aggr(df, numbers=TRUE, prop = c(TRUE, FALSE))
+```
+As we can see, we have 1895 records in total, and no missing value in this data set.
+
+This function plots and calculates the amount of missing values in each variable and in certain combinations. On the right-hand chart, we can see the missing values' distribution in a combination. Notice that left-hand chart uses proportions  as Y-axis, while the right one uses real number because we set prop = c(TRUE, FALSE).
+
+```{r}
+# Using mice library
+md.pattern(df)
+```
+This chart demonstrates the distribution of missing values. The values on the left side represent different groups of the data set. The values on the right side represent the total number of variables that contain missing value. The top line are names of different variables. The bottom line represents the number of missing values of each variable.
+
+```{r}
+# Overview of new data set
+sum(is.na(df))
+head(df, 10)
+```
+
+## 5. Data Analyze
+### 5.1 Relationship between different routes and climbing.
+```{r}
+Attempted <- data.frame(matrix(ncol = 3, nrow = 0))
+name <- c("Route", "Situation", "Count")
+colnames(Attempted) <- name
+
+Succeeded <- data.frame(matrix(ncol = 3, nrow = 0))
+name <- c("Route", "Situation", "Count")
+colnames(Succeeded) <- name
+
+for (i in c(1:22)) {
+  df.temp = df[which(df$Route == unique(df$Route)[i]), ]
+  
+  Attempted.temp = as.data.frame(sum(df.temp$Attempted))
+  Attempted.temp$Route <- unique(df$Route)[i]
+  Attempted.temp$Attempted <- "Attempted"
+  Attempted <- rbind(Attempted, Attempted.temp)
+  
+  Succeeded.temp = as.data.frame(sum(df.temp$Succeeded))
+  Succeeded.temp$Route <- unique(df$Route)[i]
+  Succeeded.temp$Succeeded <- "Succeeded"
+  Succeeded <- rbind(Succeeded, Succeeded.temp)
+}
+
+Attempted <- tibble::rowid_to_column(Attempted, "ID")
+Succeeded <- tibble::rowid_to_column(Succeeded, "ID")
+name <- c("ID", "Count", "Route", "Situation")
+colnames(Attempted) <- name
+colnames(Succeeded) <- name
+
+total <- rbind(Attempted, Succeeded)
+```
+
+```{r}
+ggplot(total, aes(x=Route, y=Count, fill=Situation)) + geom_bar(stat="identity",position="stack") + theme(axis.text.x=element_text(angle=90, hjust=1, vjust=.5))
+```
+For this diagram, we can conclude that most of the climbs were attempted through the 'disappointment cleaver route' and a few considerable number through the 'Emmons' and 'Kaultz Galcier'.
+
+### 5.2 Relationship between different routes and succeeded ratio
+```{r}
+Succeeded.ratio <- data.frame(matrix(ncol = 2, nrow = 0))
+name <- c("Route", "Ratio")
+colnames(Succeeded.ratio) <- name
+
+for (i in c(1:22)) {
+  temp = total[which(total$Route == unique(total$Route)[i]), ]
+  a_t = temp[which(temp$Situation == "Attempted"), ]["Count"]
+  s_t = temp[which(temp$Situation == "Succeeded"), ]["Count"]
+  r_t = s_t[1] / (a_t[1] + s_t[1])
+
+  Succeeded.temp = as.data.frame(r_t)
+  Succeeded.temp$Route <- unique(total$Route)[i]
+  Succeeded.ratio <- rbind(Succeeded.ratio, Succeeded.temp)
+}
+
+name <- c("Ratio", "Route")
+colnames(Succeeded.ratio) <- name
+```
+
+```{r}
+ggplot(Succeeded.ratio, aes(x=Route, y=Ratio), color="darkblue") + geom_bar(stat="identity", fill="darkblue", alpha=0.4) + theme(axis.text.x=element_text(angle=90, hjust=1, vjust=.5))
+```
+As we can see, the most popular route doesn't have the highest succeeded ratio. For example, the route 'Tahoma Cleaver' has the highest succeeded ratio although there are less people who choose this route. This is because biases can affect the true data distribution in the case of small sample sizes. Therefore, we can consider 0.32 as the average succeeded ratio.
+
+### 5.3 Time Series Analysis
+```{r}
+data_for <- data.frame(matrix(ncol = 3, nrow = 0))
+name <- c("Month", "Succeeded", "Attempted")
+colnames(data_for) <- name
+
+for (i in c(1:length(df$Date))) {
+  data_formatted <- as.Date(df$Date[i], format = "%m/%d/%Y")
+  class(data_formatted)
+  x_month <- format(data_formatted, "%m")
+  
+  data_for.temp = as.data.frame(x_month)
+  data_for.temp$Succeeded <- df$Succeeded[i]
+  data_for.temp$Attempted <- df$Attempted[i]
+
+  data_for <- rbind(data_for, data_for.temp)
+}
+
+final <- data.frame(matrix(ncol = 3, nrow = 0))
+
+date_set <- c("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12")
+for (i in date_set) {
+  
+  df_for_count = data_for[which(data_for$x_month == i), ]
+
+  final.temp = as.data.frame(i)
+  final.temp$Situation <- "Succeeded"
+  final.temp$Count <- sum(df_for_count$Succeeded)
+  
+  final.temp2 = as.data.frame(i)
+  final.temp2$Situation <- "Attempted"
+  final.temp2$Count <- sum(df_for_count$Attempted)
+  
+  final <- rbind(final, final.temp)
+  final <- rbind(final, final.temp2)
+}
+
+name <- c("Month", "Situation", "Count")
+colnames(final) <- name
+
+final$Month[final$Month == "01"] = "January"
+final$Month[final$Month == "02"] = "February"
+final$Month[final$Month == "03"] = "March"
+final$Month[final$Month == "04"] = "April"
+final$Month[final$Month == "05"] = "May"
+final$Month[final$Month == "06"] = "June"
+final$Month[final$Month == "07"] = "July"
+final$Month[final$Month == "08"] = "August"
+final$Month[final$Month == "09"] = "September"
+final$Month[final$Month == "10"] = "October"
+final$Month[final$Month == "11"] = "November"
+final$Month[final$Month == "12"] = "December"
+```
+
+```{r}
+ggplot(data=final, mapping=aes(x=Month, y=Count, fill=Situation)) + geom_bar(stat='identity', position='dodge') + theme(axis.text.x=element_text(angle=45, hjust=1, vjust=.5)) +   scale_x_discrete(limits=c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))
+```
+This diagram reflects temporal features of our data set. Most number of the climbing attempts and the successes are during the months, 'May', 'June', 'July', 'August' and 'September'.
+
+## 6. Feature Selection
+```{r}
+cormat <- round(cor(select(df, c("Success.Percentage", "Battery.Voltage.AVG", "Temperature.AVG", "Relative.Humidity.AVG", "Wind.Speed.Daily.AVG", "Wind.Direction.AVG", "Solare.Radiation.AVG"))), 2)
+# Merge data
+melted_cormat = melt(cormat)
+```
+
+```{r}
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + geom_tile() + theme(axis.text.x=element_text(angle=45, hjust=1, vjust=.5))
+```
+
+(1) From this diagram, we find that average temperature and average battery voltage have strong correlations. But both of them don't contribute much to our dependent variable (submit ratio).
+(2) Average solar radiation and average temperature both are correlated to average relative humidity, average daily wind speed and average daily wind direction.
+(3) Drop average solar radiation column because it has similar effect to our prediction target as the average temperature.
+(4) We also Drop average daily wind direction column and use average daily wind speed instead. Because average daily wind speed has a stronger correlation to the prediction target.
+(5) As wind speed has increased, the temperature has decrease. Therefore, during colder days, the wind speed is high which has negative effect on climbing.
+
+#### Finally, we choose 4 columns to feed into the linear regression model, which are average temperature, average relative humidity, average daily wind speed, routes. The prediction target is succeeded ratio.
+
+## 7. Data Encoding
+```{r}
+# Route column contains categorical values. We use One-hot encoding to encode char values into numeric values.
+df <- tibble::rowid_to_column(df, "ID")
+df.new = model.matrix(~Route, df) %>% as.data.frame()
+df.new <- tibble::rowid_to_column(df.new, "ID")
+df.new.total <- merge(df, df.new, by="ID")
+
+df.new.total <- subset(df.new.total, select=-c(ID, Date, Attempted, Succeeded, Battery.Voltage.AVG, Wind.Direction.AVG, Solare.Radiation.AVG, Route,`(Intercept)`))
+```
+
+
+```{r}
+# Check for NAs
+sum(is.na(df.new.total))
+```
+
+## 8. Data Normalization
+```{r}
+# Normalization
+min_max_norm <- function(x) {
+      (x - min(x)) / (max(x) - min(x))
+}
+df.new.total.norm <- as.data.frame(lapply(df.new.total, min_max_norm))
+```
+
+#### Notice that we use Min-Max normalization instead of Standardization for data rescaling for two reasons.First, we want to bound the data between 0 and 1. Also, all weather data doesn't follow Gaussian Distribution. Their distributions are unkown to us.
+
+```{r}
+# Standardization
+# df.new.total.norm1 = sapply(df.new.total1, function(df.new.total1) (df.new.total1-mean(df.new.total1))/sd(df.new.total1))
+```
+
+```{r}
+summary(df.new.total.norm)
+```
+
+## 9. Data Set Partitioning
+We use 80% of the data set for training, and the rest for testing.
+
+```{r}
+# Random sample for data set division
+# X <- subset(df.new.total.norm, select=-Success.Percentage)
+# Y <- subset(df.new.total.norm, select=Success.Percentage)
+
+# 80% of the sample size
+smp_size <- floor(0.80 * nrow(df.new.total.norm))
+
+# Set the seed to make your partition reproducible
+set.seed(123)
+# train_ind <- sample(seq_len(nrow(X)), size = smp_size)
+# train_X <- X[train_ind, ]
+# test_X <- X[-train_ind, ]
+# train_Y <- Y[train_ind, ]
+# test_Y <- Y[-train_ind, ]
+
+train_ind <- sample(seq_len(nrow(df.new.total.norm)), size = smp_size)
+
+train <- df.new.total.norm[train_ind, ]
+test <- df.new.total.norm[-train_ind, ]
+```
+
+## 10. Linear Regression
+To test the significance of each independent variable, we conduct four experiments. We set the first experimental result as baseline. In second experiment, we predict the dependent variable without average daily wind speed. The third and fourth experiments predict the dependent variable without average temperature and average relative humidity respectively.
+```{r}
+# Feed training data in to the multiple linear regression model
+regressor1 = lm(formula = Success.Percentage ~ ., data = train)
+regressor2 = lm(formula = Success.Percentage ~ -Wind.Speed.Daily.AVG, data = train)
+regressor3 = lm(formula = Success.Percentage ~ -Temperature.AVG, data = train)
+regressor4 = lm(formula = Success.Percentage ~ -Relative.Humidity.AVG, data = train)
+
+summary(regressor1)
+
+# Test the trained model
+y_pred1 = predict(regressor1, newdata = test)
+y_pred2 = predict(regressor2, newdata = test)
+y_pred3 = predict(regressor3, newdata = test)
+y_pred4 = predict(regressor4, newdata = test)
+```
+
+## 11. Evaluation
+```{r}
+# summary(y_pred)
+# summary(test1$Success.Percentage)
+
+# round(RMSE(y_pred, test1$Success.Percentage), 3) # Root mean squared error
+# round(MAE(y_pred, test1$Success.Percentage), 3) # Mean Absolute Error
+
+cat("Experiment 1 - \n")
+cat("RMSE for feature set 1: ", round(RMSE(y_pred1, test$Success.Percentage), 3), "\n")
+cat("MAE for feature set 1: ", round(MAE(y_pred1, test$Success.Percentage), 3), "\n")
+
+cat("\nExperiment 2 - \n")
+cat("RMSE for feature set 2: ", round(RMSE(y_pred2, test$Success.Percentage), 3), "\n")
+cat("MAE for feature set 2: ", round(MAE(y_pred2, test$Success.Percentage), 3), "\n")
+
+cat("\nExperiment 3 - \n")
+cat("RMSE for feature set 3: ", round(RMSE(y_pred3, test$Success.Percentage), 3), "\n")
+cat("MAE for feature set 3: ", round(MAE(y_pred3, test$Success.Percentage), 3), "\n")
+
+cat("\nExperiment 4 - \n")
+cat("RMSE for feature set 4: ", round(RMSE(y_pred4, test$Success.Percentage), 3), "\n")
+cat("MAE for feature set 4: ", round(MAE(y_pred4, test$Success.Percentage), 3), "\n")
+```
+(1) From the results, we can see that Exp1 has the best results. If a RMSE value is in the range of (0.2, 0.5), this model can predict future data accurately. Our model's RMSE value is 0.46, which means that this model have learned the distribution of our data set.
+(2) Other experiments produce similar results to each other, but they are all worse than Exp1. Therefore, we can conclude that every feature we used as independent variables are important for predicting the dependent variable.
+
+```{r}
+cat("Last Block!")
+```
