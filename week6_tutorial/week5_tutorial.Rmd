@@ -1,0 +1,256 @@
+---
+title: "Week6 Tutorial - Logistic Regression"
+date: "21/3/2021"
+output: html_notebook
+---
+
+```{r}
+# Import libraries
+library(tidyverse)
+library(DataExplorer)
+library(VIM)
+library(mice)
+library(missForest)
+library(caret)
+library(psych)
+library(reshape2)
+library(ROCR)
+```
+
+## 1. Dataset Description
+
+### 1.1 General Information
+#### Data Set: https://www.kaggle.com/sajidsaifi/prostate-cancer
+#### Reference: https://www.kaggle.com/smogomes/prostate-cancer-prediction-model/notebook
+This dataset contains different measures of prostate cancer tissue. Our goal is to design a logistic regression model to predict whether an instance is malignant (M) cancer or benign (B) cancer.
+
+- Feature number: 9
+- Instance number: 100
+
+### 1.2 Independent Variables
+(1) Radius (Continuous variable).
+(2) Texture (Continuous variable).
+(3) Perimeter (Continuous variable).
+(4) Area (Continuous variable).
+(5) Smoothness (Continuous variable).
+(6) Compactness (Continuous variable).
+(7) Symmetry (Continuous variable).
+(8) Fractal (Continuous variable).
+
+### 1.3 Dependent Variables
+(1) Diagnosis result (Categorical variable): M (1), B (0).
+
+```{r}
+# Load data
+df <- read.csv('Prostate_Cancer.csv', header = T)
+```
+
+## 2. Dataset Overview
+```{r}
+summary(df)
+```
+
+```{r}
+# Dataset info
+str(df)
+```
+
+## 4. Data Imputation
+```{r}
+# Prior to treating missing values any blanks in the data set must be converted to NA.
+df <- mutate_all(df, na_if, "")
+```
+
+### 4.1 Plot Missing Values
+```{r}
+# Viewing and counting missing data using DataExplorer package.
+plot_missing(df)
+```
+Good News, there is no missing value now.
+
+```{r}
+# Using VIM library
+vim_plot <- aggr(df, numbers=TRUE, prop = c(TRUE, FALSE))
+```
+As we can see, we have 100 records in total, and no missing value in this data set.
+
+This function plots and calculates the amount of missing values in each variable and in certain combinations. On the right-hand chart, we can see the missing values' distribution in a combination. Notice that left-hand chart uses proportions  as Y-axis, while the right one uses real number because we set prop = c(TRUE, FALSE).
+
+```{r}
+# Using mice library
+md.pattern(df)
+```
+This chart demonstrates the distribution of missing values. The values on the left side represent different groups of the data set. The values on the right side represent the total number of variables that contain missing value. The top line are names of different variables. The bottom line represents the number of missing values of each variable.
+
+```{r}
+# Overview of new data set
+sum(is.na(df))
+head(df, 10)
+```
+
+## 5. Data Analyze
+
+### 5.1 Distribution of diagnosis results
+```{r}
+ggplot(df, aes(x=diagnosis_result), color="darkblue") +
+  geom_histogram(stat='count', aes(y = ..count..), width=.1, fill="darkblue", alpha=0.4) +
+  theme(axis.text.x=element_text(angle=0, hjust=1, vjust=.5))
+```
+
+### 5.2 Distribution of the dependent variable.
+```{r}
+ggplot(df, aes(y = diagnosis_result)) +
+  geom_bar(width=.2, fill="darkblue", alpha=0.4) +
+  xlab("Count") +
+  ylab("Cancer") +
+  geom_text(stat='count', aes(label=..count..), hjust=1.5, vjust=.5)
+```
+
+## 6. Feature Selection
+```{r}
+df.cor <- df %>%
+      mutate(diagnosis_result = ifelse(diagnosis_result == "B", 0, 1))
+
+str(df.cor)
+```
+
+
+```{r}
+# df.cor = df
+# df.cor$diagnosis_result <- factor(df.cor$diagnosis_result, 
+#                  levels=c('M', 'B'), 
+#                  labels=c(0, 1))
+# df.cor$diagnosis_result = as.numeric(df.cor$diagnosis_result)
+```
+
+```{r}
+cormat <- round(cor(select(df.cor, c("diagnosis_result", "radius", "texture", "perimeter", "area", "smoothness", "compactness", "symmetry", "fractal_dimension"))), 3)
+# Merge data
+melted_cormat = melt(cormat)
+```
+
+```{r}
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile() +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=.5)) +
+  geom_text(aes(Var2, Var1, label = value),color='white', size=3)
+```
+From this diagram, we can see that fractal dimension and texture have low correlations with other features. Therefore, we remove these two features from our database. In addition, we remove perimeter column from our dataset for avoiding duplication because it has a strong correlation with the area column.
+
+```{r}
+df.cor = subset(df.cor, select = -c(fractal_dimension, texture, perimeter) )
+str(df.cor)
+```
+
+## 7. Data Normalization
+```{r}
+# Normalization
+min_max_norm <- function(x) {
+      (x - min(x)) / (max(x) - min(x))
+}
+df.norm = df.cor
+df.norm[3:7] <- as.data.frame(lapply(df.cor[3:7], min_max_norm))
+```
+
+#### Notice that we use Min-Max normalization instead of Standardization for data rescaling for two reasons.First, we want to bound the data between 0 and 1. Also, all weather data doesn't follow Gaussian Distribution. Their distributions are unkown to us.
+
+```{r}
+sum(is.na(df))
+summary(df.norm)
+```
+
+## 8. Data Set Partitioning
+We use 80% of the data set for training, and the rest for testing.
+
+```{r}
+# 80% of the sample size
+smp_size <- floor(0.80 * nrow(df))
+set.seed(123)
+
+train_ind <- sample(seq_len(nrow(df.norm)), size = smp_size)
+train <- df.norm[train_ind, ]
+test <- df.norm[-train_ind, ]
+```
+
+## 10. Logistic Regression
+
+### 10.1 Check data distribution
+```{r}
+prop.table(table(df.norm$diagnosis_result))
+prop.table(table(train$diagnosis_result))
+prop.table(table(test$diagnosis_result))
+```
+We can see that the training set and test set have similar label distributions as the original dataset.
+
+### 10.2 Build classifier
+```{r}
+classifier = glm(diagnosis_result ~.,
+                 train,
+                 family = binomial)
+summary(classifier)
+```
+We use GLM for binomial logistic regression. We can see that the area feature has a strong correlation with the dependent variable. Also the fisher scoring iteration number is automatically set as 6.
+
+### 10.3 Training Process
+```{r}
+# y_train
+pred_prob_training <- predict(classifier, type = 'response', train[ ,-10] )
+# y_hat_train
+pred_class_training = ifelse(pred_prob_training > 0.5, 1, 0)
+cbind(pred_prob_training, pred_class_training)
+cm_training = table(train$diagnosis_result, pred_class_training)
+cm_training
+```
+
+### 10.4 Training Evaluation (Accuracy)
+```{r}
+accuracy_training <- sum(diag(cm_training))/sum(cm_training)
+accuracy_training
+```
+
+### 10.5 Test Process
+```{r}
+# y_test
+pred_prob_test <- predict(classifier, type = 'response', test[ ,-10] )
+pred_prob_test
+# y_hat_test
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+pred_class_test
+cm_test = table(test$diagnosis_result, pred_class_test)
+cm_test
+```
+
+### 10.6 Testing Accuracy
+```{r}
+accuracy_test <- sum(diag(cm_test))/sum(cm_test)
+accuracy_test
+```
+This is unusual because test accuracy is better than training accuracy. This is because the dataset is relatively small.
+
+## 11. AUC & ROC Analysis
+```{r}
+# To draw ROC we need to predict the prob values. 
+pred = prediction(pred_prob_test, test$diagnosis_result)
+perf = performance(pred, "tpr", "fpr")
+pred
+perf
+```
+
+```{r}
+plot(perf, colorize = T)
+plot(perf, colorize=T, 
+     main = "ROC curve",
+     ylab = "Sensitivity",
+     xlab = "Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+
+# Area Under Curve
+auc <- as.numeric(performance(pred, "auc")@y.values)
+auc <-  round(auc, 3)
+auc
+```
+
+```{r}
+cat("Last Block!")
+```
