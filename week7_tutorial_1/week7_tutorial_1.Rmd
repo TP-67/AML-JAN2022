@@ -1,5 +1,5 @@
 ---
-title: "Week7 Tutorial - Naive Bayes"
+title: "Week7 Tutorial - Regularized Regression"
 date: "13/3/2021"
 output: html_notebook
 ---
@@ -11,11 +11,18 @@ library(DataExplorer)
 library(VIM)
 library(mice)
 library(missForest)
+# Sampling, cross validation
 library(caret)
 library(psych)
 library(reshape2)
 library(ROCR)
 library(naivebayes)
+# Regression models
+library(glmnet)
+library(mlbench)
+library(ggplot2)
+# Plotting coeffs
+library(broom)
 ```
 
 ## 1. Dataset Description
@@ -176,113 +183,163 @@ We use 80% of the data set for training, and the rest for testing.
 # 80% of the sample size
 smp_size <- floor(0.80 * nrow(df))
 set.seed(123)
-train_ind <- sample(seq_len(nrow(df.norm)), size = smp_size)
+train_ind <- sample(seq_len(nrow(df.norm)), size=smp_size)
 train <- df.norm[train_ind, ]
 test <- df.norm[-train_ind, ]
 ```
 
-## 10. Naive Bayes
+## 9. Experiments
 
-### 10.1 Check data distribution
+### 9.1 Baseline Linear regression
+
+#### In regression with a single independent variable, the coefficient tells you how much the dependent variable is expected to increase (if the coefficient is positive) or decrease (if the coefficient is negative) when that independent variable increases by one.
+(ref: https://dss.princeton.edu/online_help/analysis/interpreting_regression.htm)
+
 ```{r}
-prop.table(table(df.norm$diagnosis_result))
-prop.table(table(train$diagnosis_result))
-prop.table(table(test$diagnosis_result))
-```
-We can see that the training set and test set have similar label distributions as the original dataset.
-
-### 10.2 Build classifier
-```{r}
-# Naive Bayes model
-Naive_Bayes_basic = naive_bayes(x=train[ , -1],
-                        y=as.factor(train$diagnosis_result), laplace=0 )
-summary(Naive_Bayes_basic)
-
-# Lapace Naive Bayes
-Naive_Bayes_laplace = naive_bayes(x=train[ , -1],
-                                  y=as.factor(train$diagnosis_result), laplace = 1 )
-summary(Naive_Bayes_laplace)
-```
-
-### 10.3 Training Process
-```{r}
-# y_train
-pred_class_training <- predict(Naive_Bayes_basic, type = 'class', train[ ,-1] )
-pred_prob_training <- predict(Naive_Bayes_basic, type = 'prob', train[ ,-1] )
-# y_hat_train
-# pred_class_training = ifelse(as.numeric(pred_prob_training) > 1.5, 1, 0)
-# cbind(pred_prob_training, pred_class_training)
-cm_training = table(train$diagnosis_result, pred_class_training)
+l_baseline <- glm(formula = diagnosis_result ~ . , data = train)
+summary(l_baseline)
 ```
 
 ```{r}
-# y_train
-pred_class_laplace_training <- predict(Naive_Bayes_laplace, type = 'class', train[ ,-1] )
-pred_prob_laplace_training <- predict(Naive_Bayes_laplace, type = 'prob', train[ ,-1] )
-# y_hat_train
-# pred_class_laplace_training = ifelse(as.numeric(pred_prob_laplace_training) > 1.5, 1, 0)
-cm_laplace_training = table(train$diagnosis_result, pred_class_laplace_training)
-```
-
-### 10.4 Confusion statistics using 'kappa' library
-```{r}
-confusionMatrix(cm_training)
+names(l_baseline)
 ```
 
 ```{r}
-confusionMatrix(cm_laplace_training)
-```
-
-### 10.4 Training Evaluation (Accuracy)
-```{r}
-accuracy_training <- sum(diag(cm_training))/sum(cm_training)
-accuracy_training
+coefficients(l_baseline)
 ```
 
 ```{r}
-accuracy_laplace_training <- sum(diag(cm_laplace_training))/sum(cm_laplace_training)
-accuracy_laplace_training
+plot(coefficients(l_baseline))
 ```
 
-### 10.5 Test Process
+### 9.2 Rigid regression
 ```{r}
-# y_test
-pred_class_test <- predict(Naive_Bayes_basic, type = 'class', test[ ,-1])
-pred_prob_test <- predict(Naive_Bayes_basic, type = 'prob', test[ ,-1])
-# y_hat_test
-# pred_class_test = ifelse(as.numeric(pred_prob_test) > 1.5, 1, 0)
-# pred_class_test
-cm_test = table(test$diagnosis_result, pred_class_test)
+# We convert the data into matrix because the model "glmnet" we are going to use data in matrix form.
+# If your dataset contains categorical values, all variables need to be converted into numerical form before converting the dataset into a matrix.
+x <- data.matrix(train[,-1])
+y <- train$diagnosis_result
 ```
 
-### 10.6 Testing Accuracy
+Glmnet parameter alpha=0 for ridge regression.
+For numerical prediction choose 'family=gaussian', for classification 'family=binomial'.
 ```{r}
-accuracy_test <- sum(diag(cm_test))/sum(cm_test)
-accuracy_test
+# glmnet by defaut chooses 100 lambda values that are data dependent
+l_ridge <- glmnet(x, y, family="gaussian", alpha=0)
+
+# Plot the coefficients with changing lambda
+plot(l_ridge, xvar='lambda', label=T)
+```
+(1) All features are relevant to independent variables to some extend since the range of correlation is (-1.0, 1.2).
+(2)From the plot note that the coefficients reduce when lambda increases. However all 13 attributes remain, none of them are dropped. 
+
+#### Now we need to find the best value for lambda. This may be done using the built-in cross validation of cv.glmnet.
+```{r}
+# Now the question is on how to choose lambda value?
+# The following plots MSE for various training and validation samples (concept to be covered in cross validation) and various lambdas.
+cv_out_ridge = cv.glmnet(x, y, alpha=0)
+plot (cv_out_ridge)
 ```
 
-## 11. AUC & ROC Analysis
 ```{r}
-# To draw ROC we need to predict the prob values. 
-pred = prediction(as.numeric(pred_class_test), as.numeric(test$diagnosis_result))
-perf = performance(pred, "tpr", "fpr")
-pred
-perf
+names(cv_out_ridge)
+```
+
+#### Two lambda values may be noted. 'lambda.min', 'lambda.1se'- lambda for error within 1 standard deviation.
+```{r}
+# lambda_min gives us the lambda value with the lowest error.
+lambda_min <- cv_out_ridge$lambda.min
+lambda_min
 ```
 
 ```{r}
-plot(perf, colorize = T)
-plot(perf, colorize=T, 
-     main = "ROC curve",
-     ylab = "Sensitivity",
-     xlab = "1 - Specificity",
-     print.cutoffs.at=seq(0,1,0.3),
-     text.adj= c(-0.2,1.7))
-# Area Under Curve
-auc <- as.numeric(performance(pred, "auc")@y.values)
-auc <-  round(auc, 3)
-auc
+# lambda_1se gives us the lambda value with slightly higher error but better regularization.
+lambda_1se<- cv_out_ridge$lambda.1se
+lambda_1se
 ```
+
+```{r}
+log(lambda_1se)
+```
+
+#### Now let us plot the ridge regression output once again
+```{r}
+# By increasing the regularization, we reduce the weight value of some variables. Each variable has been given the new weight.
+plot(l_ridge, xvar = 'lambda', label=T)
+abline(v = log(cv_out_ridge$lambda.1se), col = "red", lty = "dashed")
+abline(v = log(cv_out_ridge$lambda.min), col = "blue", lty = "dashed")
+```
+
+```{r}
+# Now set lambda to one of these values and build the model.
+l_ridge_final <- glmnet(x, y, family="gaussian", lambda = lambda_1se, alpha=0)
+# We can see the correlations listed here.
+coef(l_ridge_final)
+```
+
+```{r}
+plot(coef(l_ridge_final))
+```
+
+```{r}
+# Alternate plot of the coeffs
+coef(l_ridge_final) %>%
+  tidy() %>%
+  filter(row != "(Intercept)") %>%
+  top_n(25, wt = abs(value)) %>%
+  ggplot(aes(value, reorder(row, value))) +
+  geom_point() +
+  ggtitle("Top 25 influential variables") +
+  xlab("Coefficient") +
+  ylab(NULL)
+```
+
+```{r}
+# Prediction with training set
+p1 <- predict(l_ridge_final, x)
+rmse_l_ridge_final <- sqrt(mean((train$diagnosis_result-p1)^2))
+rmse_l_ridge_final
+```
+
+```{r}
+# Repeat the same with lasso regression
+cv_out_lasso = cv.glmnet(x, y, alpha = 1)
+plot (cv_out_lasso)
+```
+
+```{r}
+names(cv_out_lasso)
+```
+
+#### Two lambda values may be noted. 'lambda.min', 'lambda.1se'- lambda for error within 1 standard deviation.
+```{r}
+lambda_min <- cv_out_lasso$lambda.min
+lambda_min
+lambda_1se<- cv_out_lasso$lambda.1se
+lambda_1se
+log(lambda_1se)
+```
+
+```{r}
+# Now let us plot the lasso regression output once again
+l_lasso <- glmnet(x, y, family="gaussian", alpha=1)
+plot(l_lasso, xvar = 'lambda', label=T)
+abline(v = log(cv_out_lasso$lambda.1se), col = "red", lty = "dashed")
+abline(v = log(cv_out_lasso$lambda.min), col = "blue", lty = "dashed")
+```
+When the lambda equals -7, we have 5 input variables. However, when lambda reaches 'min_lam', there are only three variables left. This means three of them have become a very low value of 0.
+
+```{r}
+# Now set lambda to one of these values and build the model
+l_lasso_final <- glmnet(x, y, family="gaussian", lambda = lambda_1se, alpha=0)
+coef(l_lasso_final)
+plot(coef(l_lasso_final))
+```
+
+```{r}
+# Finally predict using train and test set and compare the two models.
+cbind(coefficients(l_baseline), coef(l_ridge_final), coef(l_lasso_final) )
+```
+These three columns are baseline, rigid, and lasso, respectively.
 
 ```{r}
 cat("Last Block!")
