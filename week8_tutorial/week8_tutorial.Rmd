@@ -1,0 +1,371 @@
+---
+title: "Week9 Tutorial - SVM"
+date: "17/3/2021"
+output: html_notebook
+---
+
+```{r}
+# Import libraries
+library(DataExplorer)
+library(missForest)
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(caTools)
+library(caret)
+library(e1071)
+library(psych)
+library(ROCR)
+library(mice)
+library(VIM)
+```
+
+## 1. Dataset Description
+
+### 1.1 General Information
+#### Dataset: https://www.kaggle.com/fernandolima23/classification-in-asteroseismology
+#### Reference: https://www.kaggle.com/jetakow/logistic-regression-test-auc-0-991-acc-0-95
+This dataset contains different measures of stars. Our goal is to classify the stars into two categories (RGB-HeB classification) based on these measures.
+
+- Feature number: 4
+- Instance number: 1001
+
+### 1.2 Independent Variables
+(1) Dnu F8.5 (uHz) (Continuous variable): 'Mean large frequency separation of modes with the same degree and consecutive order'.
+(2) Numax F9.5 (uHz) (Continuous variable): 'Frequency of maximum oscillation power'.
+(3) Epsilon F7.3 (Continuous variable): 'Location of the mode'.
+
+### 1.3 Dependent Variables
+(1) Pop (Categorical variable): HeB (1), RGB (0).
+
+- RGB (Red Giant Branch): the portion of the giant branch before helium ignition occurs in the course of stellar evolution.
+- HeB (Helium Burning): the fusion of helium in the contracted core of a red giant star at extremely high temperatures, hotter than those reached in the Sun. 
+
+## 2. Why we choose this dataset?
+(1) SVM is not suitable for long-term time series forecasting. Nowadays, when talking about sequential data (CV, NLP), all we need are Transformers. Therefore, we choose a binary classification task in this project.
+(2) SVM performs better on a small dataset since it requires massive computation.
+(3) Also, we need to select appropriate hyper-parameters and kernels for SVM models.
+
+```{r}
+# Load data
+df <- read.csv('classification_in_asteroseismology.csv', header = T)
+```
+
+## 3. Dataset Overview
+```{r}
+summary(df)
+```
+
+```{r}
+# Dataset info
+str(df)
+```
+
+## 4. Data Imputation
+```{r}
+# Prior to treating missing values any blanks in the data set must be converted to NA.
+df <- mutate_all(df, na_if, "")
+```
+
+### 4.1 Plot Missing Values
+```{r}
+# Viewing and counting missing data using DataExplorer package.
+plot_missing(df)
+```
+Good News, there is no missing value now.
+
+```{r}
+# Using VIM library
+vim_plot <- aggr(df, numbers=TRUE, prop = c(TRUE, FALSE))
+```
+As we can see, we have 1001 records in total, and no missing value in this data set.
+
+This function plots and calculates the amount of missing values in each variable and in certain combinations. On the right-hand chart, we can see the missing values' distribution in a combination. Notice that left-hand chart uses proportions  as Y-axis, while the right one uses real number because we set prop = c(TRUE, FALSE).
+
+```{r}
+# Using mice library
+md.pattern(df)
+```
+This chart demonstrates the distribution of missing values. The values on the left side represent different groups of the data set. The values on the right side represent the total number of variables that contain missing value. The top line are names of different variables. The bottom line represents the number of missing values of each variable.
+
+```{r}
+# Overview of new data set
+sum(is.na(df))
+head(df, 10)
+```
+
+## 5. Data Analyze
+
+### 5.1 Distribution of the dependent variable
+```{r}
+ggplot(df, aes(y = POP)) +
+  geom_bar(width=.2, fill="darkblue", alpha=0.4) +
+  xlab("Count") +
+  ylab("Cancer") +
+  geom_text(stat='count', aes(label=..count..), hjust=1.5, vjust=.5)
+```
+
+## 6. Feature Selection
+
+### 6.1 Correlation matrix
+```{r}
+df.cor <- df %>%
+      mutate(POP = ifelse(POP == 1, 0, 1))
+str(df.cor)
+```
+
+### 6.2 One-hot encoding
+```{r}
+# df.cor = df
+# df.cor$diagnosis_result <- factor(df.cor$diagnosis_result, 
+#                  levels=c('M', 'B'), 
+#                  labels=c(0, 1))
+# df.cor$diagnosis_result = as.numeric(df.cor$diagnosis_result)
+```
+
+### 6.3 Correlation heatmap
+```{r}
+cormat <- round(cor(select(df.cor, c("POP", "Dnu", "numax", "epsilon"))), 3)
+# Merge data
+melted_cormat = melt(cormat)
+```
+
+```{r}
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile() +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=.5)) +
+  geom_text(aes(Var2, Var1, label = value),color='white', size=3)
+```
+What a perfect dataset! Strong correlations between independent variables and the dependent variable.
+
+From this diagram, we can see that fractal dimension and texture have low correlations with other features. Therefore, we remove these two features from our database. In addition, we remove perimeter column from our dataset for avoiding duplication because it has a strong correlation with the area column.
+
+### 6.4 Feature selection
+```{r}
+# df.cor = subset(df.cor, select = -c(fractal_dimension, texture, perimeter) )
+# str(df.cor)
+```
+
+### 6.5 Correlation heatmap
+```{r}
+plot_density(df)
+```
+Clearly, all the dimensions do not follow the Gaussian distribution.
+
+## 7. Data Normalization
+```{r}
+# Normalization
+min_max_norm <- function(x) {
+      (x - min(x)) / (max(x) - min(x))
+}
+# df.norm = df.cor
+df.norm <- as.data.frame(lapply(df, min_max_norm))
+```
+
+#### Notice that we use Min-Max normalization instead of Standardization for data rescaling for two reasons.First, we want to bound the data between 0 and 1. Also, all data doesn't follow Gaussian Distribution. Their distributions are unkown to us.
+
+```{r}
+sum(is.na(df))
+summary(df.norm)
+```
+
+## 8. Dataset Partitioning
+We use 80% of the data set for training, and the rest for testing.
+
+```{r}
+# 80% of the sample size
+smp_size <- floor(0.80 * nrow(df))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(df.norm)), size = smp_size)
+train <- df.norm[train_ind, ]
+test <- df.norm[-train_ind, ]
+```
+
+### 8.1 Check data distribution
+```{r}
+prop.table(table(df.norm$POP))
+prop.table(table(train$POP))
+prop.table(table(test$POP))
+```
+We can see that the training set and test set have similar label distributions as the original dataset.
+
+## 9. SVC model
+
+### 9.1 SVM model with the RBF kernel
+```{r}
+# Define SVM model with the rbf kernel.
+svm_rbf <- svm(POP~., data = train)
+summary(svm_rbf)
+```
+
+```{r}
+# Training process and confusion statistics
+pred_prob_train = predict (svm_rbf, train)
+pred_class_train = ifelse(pred_prob_train > 0.5, 1, 0)
+confusionMatrix(table(Predicted = pred_class_train, Actual = train$POP))
+```
+
+```{r}
+# Testing process and confusion statistics
+pred_prob_test = predict (svm_rbf, test)
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+cm = table(Predicted = pred_class_test, Actual = test$POP)
+confusionMatrix(cm)
+```
+
+```{r}
+# Testing accuracy
+accuracy = sum(diag(cm))/sum(cm)*100
+accuracy
+```
+
+### 9.2 SVM model with the linear kernel
+```{r}
+# Define SVM model with the linear kernel.
+svm_linear <- svm(POP~., data = train, kernel = "linear")
+summary(svm_linear)
+
+# Training process and confusion statistics
+pred_prob_train = predict (svm_linear, train)
+pred_class_train = ifelse(pred_prob_train > 0.5, 1, 0)
+confusionMatrix(table(Predicted = pred_class_train, Actual = train$POP))
+
+# Testing process and confusion statistics
+pred_prob_test = predict (svm_linear, test)
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+cm = table(Predicted = pred_class_test, Actual = test$POP)
+confusionMatrix(cm)
+
+# Testing accuracy
+accuracy = sum(diag(cm))/sum(cm)*100
+accuracy
+```
+
+### 9.3 SVM model with the sigmoid kernel
+```{r}
+# Define SVM model with the sigmoid kernel.
+svm_sigmoid <- svm(POP~., data = train, kernel = "sigmoid")
+summary(svm_sigmoid)
+
+# Training process and confusion statistics
+pred_prob_train = predict (svm_sigmoid, train)
+pred_class_train = ifelse(pred_prob_train > 0.5, 1, 0)
+confusionMatrix(table(Predicted = pred_class_train, Actual = train$POP))
+
+# Testing process and confusion statistics
+pred_prob_test = predict (svm_sigmoid, test)
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+cm = table(Predicted = pred_class_test, Actual = test$POP)
+confusionMatrix(cm)
+
+# Testing accuracy
+accuracy = sum(diag(cm))/sum(cm)*100
+accuracy
+```
+
+### 9.4 SVM model with the polynomial kernel
+```{r}
+# Define SVM model with the polynomial kernel.
+svm_polynomial <- svm(POP~., data = train, kernel = "polynomial")
+summary(svm_polynomial)
+
+# Training process and confusion statistics
+pred_prob_train = predict (svm_polynomial, train)
+pred_class_train = ifelse(pred_prob_train > 0.5, 1, 0)
+confusionMatrix(table(Predicted = pred_class_train, Actual = train$POP))
+
+# Testing process and confusion statistics
+pred_prob_test = predict (svm_polynomial, test)
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+cm = table(Predicted = pred_class_test, Actual = test$POP)
+confusionMatrix(cm)
+
+# Testing accuracy
+accuracy = sum(diag(cm))/sum(cm)*100
+accuracy
+```
+
+## 10. Model Tuning
+
+### 10.1 Hyper-parameters tuning
+(1) 'C': controls the strength of regularization, thus affecting generalization.
+- A large 'C' value results in a small decision boundary. Therefore, it reduces the generalization ability.
+- A small 'C' values leads to a large decision boundary. But it will classify few instances to a wrong category.
+(2) 'Gamma': controls the influence of each instance (only applied to rbf and sigmoid kernels).
+- A high 'Gamma' value allows the model to consider only the instances close to the decision boundary.
+- A low 'Gamma' value allows the model to equally take all instances into consideration when calculating decision boundary.
+
+```{r}
+# Set random seed
+set.seed(123)
+
+# Tuning function tunes the hyper-parameters of the model using grid search method.
+# Here, we tune the SVM model with a rbf kernel since it has the best performance.
+tuned_model = tune(svm, POP~., data=train,
+     ranges = list(epsilon = seq (0, 1, 0.1), cost = 2^(0:2)))
+plot (tuned_model)
+# summary (tuned_model)
+tuned_model$best.parameters
+opt_model = tuned_model$best.model
+summary(opt_model)
+```
+
+### 10.2 Further tuning
+```{r}
+# Tuning function tunes the hyper-parameters of the model using grid search method.
+tuned_model = tune(svm, POP~., data=train,
+     ranges = list(epsilon = seq (0, 0.1, 0.01), cost = 2^(0:2)))
+plot (tuned_model)
+# summary (tuned_model)
+tuned_model$best.parameters
+opt_model = tuned_model$best.model
+summary(opt_model)
+```
+
+### 10.3 Test SVM with the best hyper-parameters combination
+```{r}
+# Building the best model with selected hyper-parameters
+svm_best <- svm (POP~., data = train, epsilon = 0.1, cost = 4)
+
+# Training process and confusion statistics
+pred_prob_train = predict (svm_best, train)
+pred_class_train = ifelse(pred_prob_train > 0.5, 1, 0)
+confusionMatrix(table(Predicted = pred_class_train, Actual = train$POP))
+
+# Testing process and confusion statistics
+pred_prob_test = predict (svm_best, test)
+pred_class_test = ifelse(pred_prob_test > 0.5, 1, 0)
+cm = table(Predicted = pred_class_test, Actual = test$POP)
+confusionMatrix(cm)
+
+# Testing accuracy
+accuracy = sum(diag(cm))/sum(cm)*100
+accuracy
+```
+
+## 11. AUC & ROC Analysis
+```{r}
+# To draw ROC we need to predict the prob values. 
+pred = prediction(pred_prob_test, test$POP)
+perf = performance(pred, "tpr", "fpr")
+pred
+perf
+```
+
+```{r}
+plot(perf, colorize = T)
+plot(perf, colorize=T, 
+     main = "ROC curve",
+     ylab = "Sensitivity",
+     xlab = "1 - Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+# Area Under Curve
+auc <- as.numeric(performance(pred, "auc")@y.values)
+auc <-  round(auc, 3)
+auc
+```
+
+```{r}
+cat("Last Block!")
+```
