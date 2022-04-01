@@ -1,0 +1,323 @@
+---
+title: "Week9 Tutorial - Decision Tree"
+date: "22/3/2021"
+output: html_notebook
+---
+
+```{r}
+# Import libraries
+library(DataExplorer)
+library(missForest)
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(caTools)
+library(caret)
+library(e1071)
+library(psych)
+library(RCurl)
+library(ROCR)
+library(mice)
+library(VIM)
+```
+
+```{r}
+# Libraries for decision tree models
+library(rpart)
+library(rpart.plot)
+library(party)
+```
+
+
+## 1. Dataset Description
+
+### 1.1 General Information
+#### Dataset: https://www.kaggle.com/fernandolima23/classification-in-asteroseismology
+#### Reference: https://www.kaggle.com/jetakow/logistic-regression-test-auc-0-991-acc-0-95
+This dataset contains different measures of stars. Our goal is to classify the stars into two categories (RGB-HeB classification) based on these measures.
+
+- Feature number: 4
+- Instance number: 1001
+
+### 1.2 Independent Variables
+(1) Dnu F8.5 (uHz) (Continuous variable): 'Mean large frequency separation of modes with the same degree and consecutive order'.
+(2) Numax F9.5 (uHz) (Continuous variable): 'Frequency of maximum oscillation power'.
+(3) Epsilon F7.3 (Continuous variable): 'Location of the mode'.
+
+### 1.3 Dependent Variables
+(1) Pop (Categorical variable): HeB (1), RGB (0).
+
+- RGB (Red Giant Branch): the portion of the giant branch before helium ignition occurs in the course of stellar evolution.
+- HeB (Helium Burning): the fusion of helium in the contracted core of a red giant star at extremely high temperatures, hotter than those reached in the Sun. 
+
+```{r}
+# Load data
+df <- read.csv('classification_in_asteroseismology.csv', header = T)
+```
+
+## 3. Dataset Overview
+```{r}
+summary(df)
+```
+
+```{r}
+# Dataset info
+str(df)
+```
+
+## 4. Data Imputation
+```{r}
+# Prior to treating missing values any blanks in the data set must be converted to NA.
+df <- mutate_all(df, na_if, "")
+```
+
+### 4.1 Plot Missing Values
+```{r}
+# Viewing and counting missing data using DataExplorer package.
+plot_missing(df)
+```
+Good News, there is no missing value now.
+
+```{r}
+# Using VIM library
+vim_plot <- aggr(df, numbers=TRUE, prop = c(TRUE, FALSE))
+```
+As we can see, we have 1001 records in total, and no missing value in this data set.
+
+This function plots and calculates the amount of missing values in each variable and in certain combinations. On the right-hand chart, we can see the missing values' distribution in a combination. Notice that left-hand chart uses proportions  as Y-axis, while the right one uses real number because we set prop = c(TRUE, FALSE).
+
+```{r}
+# Using mice library
+md.pattern(df)
+```
+This chart demonstrates the distribution of missing values. The values on the left side represent different groups of the data set. The values on the right side represent the total number of variables that contain missing value. The top line are names of different variables. The bottom line represents the number of missing values of each variable.
+
+```{r}
+# Overview of new data set
+sum(is.na(df))
+head(df, 10)
+```
+
+## 5. Data Analyze
+
+### 5.1 Distribution of the dependent variable
+```{r}
+ggplot(df, aes(y = POP)) +
+  geom_bar(width=.2, fill="darkblue", alpha=0.4) +
+  xlab("Count") +
+  ylab("Cancer") +
+  geom_text(stat='count', aes(label=..count..), hjust=1.5, vjust=.5)
+```
+
+## 6. Feature Selection
+
+### 6.1 Correlation matrix
+```{r}
+df.cor <- df %>%
+      mutate(POP = ifelse(POP == 1, 0, 1))
+str(df.cor)
+```
+
+### 6.2 One-hot encoding
+```{r}
+# df.cor = df
+# df.cor$diagnosis_result <- factor(df.cor$diagnosis_result, 
+#                  levels=c('M', 'B'), 
+#                  labels=c(0, 1))
+# df.cor$diagnosis_result = as.numeric(df.cor$diagnosis_result)
+```
+
+### 6.3 Correlation heatmap
+```{r}
+cormat <- round(cor(select(df.cor, c("POP", "Dnu", "numax", "epsilon"))), 3)
+# Merge data
+melted_cormat = melt(cormat)
+```
+
+```{r}
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile() +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=.5)) +
+  geom_text(aes(Var2, Var1, label = value),color='white', size=3)
+```
+What a perfect dataset! Strong correlations between independent variables and the dependent variable.
+
+From this diagram, we can see that fractal dimension and texture have low correlations with other features. Therefore, we remove these two features from our database. In addition, we remove perimeter column from our dataset for avoiding duplication because it has a strong correlation with the area column.
+
+### 6.4 Feature selection
+```{r}
+# df.cor = subset(df.cor, select = -c(fractal_dimension, texture, perimeter) )
+# str(df.cor)
+```
+
+### 6.5 Correlation heatmap
+```{r}
+plot_density(df)
+```
+Clearly, all the dimensions do not follow the Gaussian distribution.
+
+## 7. Data Normalization
+```{r}
+# Normalization
+min_max_norm <- function(x) {
+      (x - min(x)) / (max(x) - min(x))
+}
+# df.norm = df.cor
+df.norm <- as.data.frame(lapply(df, min_max_norm))
+```
+
+#### Notice that we use Min-Max normalization instead of Standardization for data rescaling for two reasons.First, we want to bound the data between 0 and 1. Also, all data doesn't follow Gaussian Distribution. Their distributions are unkown to us.
+
+```{r}
+sum(is.na(df))
+summary(df.norm)
+```
+
+## 8. Dataset Partitioning
+We use 80% of the data set for training, and the rest for testing.
+
+```{r}
+# 80% of the sample size
+smp_size <- floor(0.80 * nrow(df))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(df.norm)), size = smp_size)
+train <- df.norm[train_ind, ]
+test <- df.norm[-train_ind, ]
+```
+
+### 8.1 Check data distribution
+```{r}
+prop.table(table(df.norm$POP))
+prop.table(table(train$POP))
+prop.table(table(test$POP))
+```
+We can see that the training set and test set have similar label distributions as the original dataset.
+
+## 9. Decision tree model
+
+### 9.1 Plot decision tree model with 'rpart' package
+'rpart' can generate different types of trees. 'rpart' split trees with Gini index by default.
+```{r}
+# Define decision trees model with 'rpart'
+tree = rpart(POP~ ., data=train)
+tree
+```
+
+```{r}
+prp(tree)
+```
+
+```{r}
+prp(tree, type = 5, extra = 100)
+```
+
+```{r}
+rpart.plot(tree, extra = 101, nn = TRUE)
+```
+
+### 9.2 Plot decision tree model with 'party' package
+```{r}
+tree_party = ctree(POP~ ., data=train)
+tree_party
+```
+
+```{r}
+plot(tree_party)
+```
+
+### 9.3 Split dataset with entropy information
+```{r}
+# Split with entropy information
+ent_Tree = rpart(POP ~ ., data=train, method="class", parms=list(split="information"))
+ent_Tree
+```
+
+```{r}
+prp(ent_Tree)
+```
+
+```{r}
+plotcp(ent_Tree)
+```
+
+### 9.4 Create decision trees model with parameter settings
+```{r}
+tree_with_params = rpart(POP ~ ., data=train, method="class", minsplit = 1, minbucket = 10, cp = -1)
+prp (tree_with_params)
+```
+
+```{r}
+print(tree_with_params)
+```
+
+```{r}
+summary(tree_with_params)
+```
+
+```{r}
+plot(tree_with_params)
+```
+
+```{r}
+plotcp(tree_with_params)
+```
+
+### 9.5 Predict and evaluate the performance of the trained tree model
+```{r}
+# Examine the values of Predict, which are the class probabilities.
+Predict = predict(tree_with_params, test)
+```
+
+```{r}
+Predict = predict(tree_with_params, test, type = "class")
+```
+
+```{r}
+# Producing confusion matrix
+Confusion_matrix = table(Predict, test$POP)
+Confusion_matrix
+```
+
+```{r}
+# Calculating the accuracy using the confusion matrix
+Accuracy = sum(diag(Confusion_matrix))/sum(Confusion_matrix)
+Accuracy
+```
+
+## 10. AUC & ROC Analysis
+```{r}
+# To draw ROC we need to predict the prob values. So we run predict again
+# Note that PredictROC is same as Predict with "type = prob"
+Predict_ROC = predict(tree_with_params, test)
+# Predict_ROC
+# Predict_ROC[,2]
+```
+
+```{r}
+pred = prediction(Predict_ROC[,2], test$POP)
+perf = performance(pred, "tpr", "fpr")
+```
+
+```{r}
+plot(perf, colorize = T)
+```
+
+```{r}
+plot(perf, colorize=T, 
+     main = "ROC curve",
+     ylab = "Sensitivity",
+     xlab = "Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+```
+
+```{r}
+# Area Under Curve
+auc = as.numeric(performance(pred, "auc")@y.values)
+auc = round(auc, 3)
+auc
+```
+
+```{r}
+cat("Last Block!")
+```
