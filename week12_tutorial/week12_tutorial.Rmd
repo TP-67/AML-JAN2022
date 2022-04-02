@@ -1,0 +1,181 @@
+---
+title: "Week12 Tutorial - Recurrent Neural Network"
+date: "1/4/2021"
+output: html_notebook
+---
+
+### 1. Dataset
+Weather daily values were collected in Seattle from January 1, 1948, to December 12, 2017.
+#### Reference: https://www.kaggle.com/code/rtatman/beginner-s-intro-to-rnn-s-in-r/notebook
+
+#### 1.1 Independent variables
+- The amount of precipitation
+- Maximum temperature
+- Minimum temperature
+
+#### 1.2 Dependent variable
+- Whether there was any precipitation
+
+### 2. Recurrent neural network
+A recurrent neural network predicts the value of the next time step based on the current time step and several previous successive time steps. Therefore, RNN has a better performance when dealing with sequential data since it considers previous experience.
+
+### 3. Set up deep learning framework
+In this experiment, we use Keras package. Keras package is built based on Tensorflow. Therefore, we install Tensorflow-2.5 first.
+```{r}
+# Import libraries
+library(keras)
+library(tidyverse)
+library(caret)
+```
+
+### 4. Load and preview dataset
+```{r}
+# read in our data
+weather_data <- read_csv("./seattleWeather_1948-2017.csv")
+
+# check out the first few rows
+head(weather_data)
+```
+
+### 5. Hyperparameters
+- max_len: the length of the sliding window.
+- batch_size: the number of instances feeds into the model at each iteration.
+- total_epochs: total number of epochs during the training process.
+```{r}
+max_len <- 6
+batch_size <- 32
+total_epochs <- 15
+
+# Set a random seed for reproducability
+set.seed(123)
+```
+
+### 6. Data preprocessing
+
+#### 6.1 Label balance
+```{r}
+rain <- weather_data$RAIN
+table(rain)
+```
+
+#### 6.2 Generate training slices
+Cut the sequential data in overlapping sample sequences of max_len characters.
+```{r}
+# Get a list of start indexes for our (overlapping) chunks
+start_indexes <- seq(1, length(rain) - (max_len + 1), by = 3)
+
+# Create an empty matrix to store our data in
+weather_matrix <- matrix(nrow = length(start_indexes), ncol = max_len + 1)
+
+# Fill our matrix with the overlapping slices of our dataset
+for (i in 1:length(start_indexes)){
+  weather_matrix[i,] <- rain[start_indexes[i]:(start_indexes[i] + max_len)]
+}
+```
+
+#### 6.3 Data cleaning
+(1) Convert the input matrix to numeric because Keras expects a numeric matrix.
+(2) Remove any NULL value.
+```{r}
+# Convert matrix to numeric
+weather_matrix <- weather_matrix * 1
+
+# Remove NULL values
+if(anyNA(weather_matrix)){
+    weather_matrix <- na.omit(weather_matrix)
+}
+```
+
+### 7. Split dataset
+```{r}
+# Generate dependent value matrix and independent value matrix
+X <- weather_matrix[,-ncol(weather_matrix)]
+y <- weather_matrix[,ncol(weather_matrix)]
+```
+
+### 8. Create training set and testing set
+```{r}
+training_index <- createDataPartition(y, p = .9, 
+                                  list = FALSE, 
+                                  times = 1)
+
+# Training data
+X_train <- array(X[training_index,], dim = c(length(training_index), max_len, 1))
+y_train <- y[training_index]
+
+# Testing data
+X_test <- array(X[-training_index,], dim = c(length(y) - length(training_index), max_len, 1))
+y_test <- y[-training_index]
+```
+
+### 9. LSTM model
+
+#### 9.1 Create sequential model structure
+```{r}
+model <- keras_model_sequential()
+# Define input layer
+model %>% layer_dense(input_shape = dim(X_train)[2:3], units = max_len)
+# Define LSTM layer
+model %>% layer_lstm(units = 16, dropout = 0.25, recurrent_dropout = 0.25, return_sequences = FALSE)
+# Define hidden dense layer
+model %>% layer_dense(units = 8)
+# Define output layer
+model %>% layer_dense(units = 1, activation = 'sigmoid')
+```
+The output layer should have one unit since we are predicting whether a day will rain or not.
+
+#### 9.2 Print model architecture
+```{r}
+summary(model)
+```
+
+#### 9.3 Define loss function, optimizer, and metrics
+- Binary cross entropy reflects the probability of an instance falling into one of two groups.
+- Optimizer controls the amount of loss being back-propagated to the network.
+- Accuracy measures the performance of the model at each training step.
+```{r}
+model %>% compile(loss = 'binary_crossentropy', 
+                  optimizer = optimizer_adam(),
+                  metrics = c('accuracy'))
+```
+
+### 10. Training process
+
+```{r}
+trained_model <- model %>% fit(
+    x = X_train,
+    y = y_train,
+    batch_size = batch_size,
+    epochs = total_epochs,
+    validation_split = 0.1)
+```
+
+### 11. Evaluation
+```{r}
+trained_model
+```
+We can see the accuracy and loss of the training process. The training accuracy is 71.4%, and the validation accuracy is 73.9%.
+
+```{r}
+plot(trained_model)
+```
+From this diagram, we can see that the model is well trained, and there is no overfitting.
+
+### 12. Testing process
+The confusion matrix compares the predictions to the ground-truth values.
+```{r}
+classes <- model %>% predict(X_test, batch_size = batch_size)
+classes <- as.factor(ifelse(classes > 0.5, '1','0'))
+
+# Confusion matrix
+table(y_test, classes)
+```
+
+```{r}
+model %>% evaluate(X_test, y_test, batch_size = batch_size)
+```
+Our model predict with 70.2% accuracy on testing set.
+
+```{r}
+cat("Last Block!")
+```
